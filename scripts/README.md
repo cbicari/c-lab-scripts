@@ -60,6 +60,7 @@ Both scripts share these:
 | `--osc-host` | `127.0.0.1` | Where to send OSC messages |
 | `--osc-port` | `9000` | OSC port (matches Wekinator's input port in this repo) |
 | `--width` / `--height` | `640` / `342` | Resolution frames are downscaled to before tracking (`0 0` disables) |
+| `--max-fps` | `30` | Cap processing rate to reduce CPU load (`0` = uncapped, run as fast as possible) |
 | `--find-timeout` | `10.0` | Seconds to wait while looking for the NDI source |
 | `--preview` | off | Show an annotated preview window |
 | `--color-format` | `fastest` | NDI pixel format to request — see below |
@@ -71,6 +72,7 @@ Both scripts share these:
 |---|---|---|
 | `--num-poses` | `2` | Max number of people to track at once |
 | `--model-complexity` | `1` | `0` lite / `1` full / `2` heavy — bigger = more accurate, slower |
+| `--gpu` | off | Run pose inference on the GPU instead of the CPU (needs a working OpenGL/EGL driver) |
 
 `ndi_to_osc.py` also has `--model-complexity` (same `0`/`1`/`2` meaning), but
 uses it to configure MediaPipe's single-person model directly rather than
@@ -90,3 +92,23 @@ picking a downloadable model file.
   This trades away a bit of the smoothing/jitter-reduction you'd get from
   frame-to-frame tracking, but that's the tradeoff to actually get multiple
   bodies recognized.
+- `--gpu` on `ndi_to_osc_multi.py` roughly halved inference time in local
+  testing (integrated Intel GPU via Mesa: ~38ms/frame CPU vs ~20ms/frame
+  GPU). Actual gains depend on your GPU/drivers. If usage still looks
+  CPU-only with `--gpu` set, MediaPipe can silently fall back to CPU without
+  raising an error — check the terminal output when the script starts for a
+  line like `Created TensorFlow Lite delegate for GPU`; if you don't see it
+  (or see a fallback warning instead), your driver setup doesn't support the
+  GPU delegate here. `ndi_to_osc.py` (the single-person script) has no GPU
+  option at all — MediaPipe's legacy `solutions.pose` API it's built on
+  doesn't expose one in Python; only the newer Tasks API does.
+- **CPU usage**: the NDI receive thread polls for frames in a loop that, by
+  itself, isn't rate-limited — `capture_video()` just hands back whatever's
+  currently buffered, even if unchanged, so an unthrottled loop can spin far
+  faster than the camera's actual frame rate for no benefit. `--max-fps`
+  (default `30`, matching the typical NDI source frame rate) caps both the
+  NDI polling loop and the pose-inference loop so they don't do that. This
+  costs no real freshness — you can't get frames faster than the camera
+  produces them — but cuts a lot of wasted CPU. If you still need more
+  headroom for other software, lower `--max-fps` further (e.g. `15`), drop
+  `--width`/`--height`, or use `--model-complexity 0`.

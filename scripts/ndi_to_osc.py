@@ -93,17 +93,28 @@ class LatestFrame:
             return self._frame
 
 
-def ndi_receive_loop(receiver, buf, stop_event, width, height):
+def ndi_receive_loop(receiver, buf, stop_event, width, height, max_fps):
+    # capture_video() is non-blocking - it just hands back whatever is
+    # currently buffered, even if that's the same frame as last call. Called
+    # in a bare `while True` this spins as fast as Python can go (well past
+    # the NDI source's actual frame rate), pinning a full CPU core doing
+    # nothing but re-copying/re-resizing unchanged frames. Pacing this loop
+    # to roughly the source's frame rate costs no real freshness - you can't
+    # get frames faster than they arrive anyway - but cuts that wasted spin.
+    min_interval = 1.0 / max_fps if max_fps > 0 else 0.0
     frame_sync = receiver.frame_sync
     while not stop_event.is_set():
+        loop_start = time.monotonic()
         frame_sync.capture_video()
         rgb = frame_to_rgb(frame_sync.video_frame)
-        if rgb is None:
-            time.sleep(0.001)
-            continue
-        if width and height:
-            rgb = cv2.resize(rgb, (width, height), interpolation=cv2.INTER_LINEAR)
-        buf.put(rgb)
+        if rgb is not None:
+            if width and height:
+                rgb = cv2.resize(rgb, (width, height), interpolation=cv2.INTER_LINEAR)
+            buf.put(rgb)
+
+        sleep_time = min_interval - (time.monotonic() - loop_start) if min_interval else 0.001
+        if sleep_time > 0:
+            time.sleep(sleep_time)
 
 
 def send_pose_as_single_osc(landmarks):
@@ -115,13 +126,15 @@ def send_pose_as_single_osc(landmarks):
     osc_send(osc_msg, "localhost")
 
 
-def pose_loop(buf, stop_event, model_complexity, preview):
+def pose_loop(buf, stop_event, model_complexity, preview, max_fps):
+    min_interval = 1.0 / max_fps if max_fps > 0 else 0.0
     with mp_pose.Pose(
         smooth_landmarks=True,
         model_complexity=model_complexity,
         enable_segmentation=False,
     ) as pose:
         while not stop_event.is_set():
+            loop_start = time.monotonic()
             rgb = buf.get()
             if rgb is None:
                 time.sleep(0.001)
@@ -144,6 +157,10 @@ def pose_loop(buf, stop_event, model_complexity, preview):
                     stop_event.set()
                     break
 
+            sleep_time = min_interval - (time.monotonic() - loop_start)
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
     if preview:
         cv2.destroyAllWindows()
 
@@ -156,6 +173,12 @@ def main():
     parser.add_argument("--width", type=int, default=640, help="Downscale width before pose inference (0 to disable)")
     parser.add_argument("--height", type=int, default=342, help="Downscale height before pose inference (0 to disable)")
     parser.add_argument("--model-complexity", type=int, default=1, choices=[0, 1, 2])
+    parser.add_argument(
+        "--max-fps",
+        type=float,
+        default=30.0,
+        help="Cap processing rate to reduce CPU load (0 = uncapped, run as fast as possible)",
+    )
     parser.add_argument("--color-format", default="fastest", choices=sorted(COLOR_FORMATS))
     parser.add_argument("--bandwidth", default="lowest", choices=sorted(BANDWIDTHS))
     parser.add_argument("--find-timeout", type=float, default=10.0, help="Seconds to wait while discovering the NDI source")
@@ -190,13 +213,13 @@ def main():
 
     ndi_thread = threading.Thread(
         target=ndi_receive_loop,
-        args=(receiver, buf, stop_event, args.width, args.height),
+        args=(receiver, buf, stop_event, args.width, args.height, args.max_fps),
         daemon=True,
     )
     ndi_thread.start()
 
     try:
-        pose_loop(buf, stop_event, args.model_complexity, args.preview)
+        pose_loop(buf, stop_event, args.model_complexity, args.preview, args.max_fps)
     except KeyboardInterrupt:
         pass
     finally:
