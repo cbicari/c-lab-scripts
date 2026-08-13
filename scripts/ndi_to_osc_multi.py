@@ -138,28 +138,18 @@ def send_poses_as_single_osc(poses_landmarks):
     osc_send(osc_msg, "localhost")
 
 
-class MonotonicMs:
-    """Guarantees strictly increasing timestamps for PoseLandmarker's VIDEO mode."""
-
-    def __init__(self):
-        self._last = -1
-
-    def next(self):
-        ts = int(time.monotonic() * 1000)
-        if ts <= self._last:
-            ts = self._last + 1
-        self._last = ts
-        return ts
-
-
 def pose_loop(buf, stop_event, model_path, num_poses, preview):
+    # IMAGE mode, not VIDEO/LIVE_STREAM: MediaPipe's streaming modes track a
+    # single pose across frames and only reach for the multi-person detector
+    # when tracking is lost, so num_poses > 1 is unreliable there. IMAGE mode
+    # re-runs full multi-person detection on every frame - no cross-frame
+    # tracking state, but that's what actually finds more than one person.
     options = vision.PoseLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=str(model_path)),
-        running_mode=vision.RunningMode.VIDEO,
+        running_mode=vision.RunningMode.IMAGE,
         num_poses=num_poses,
         output_segmentation_masks=False,
     )
-    timestamps = MonotonicMs()
 
     with vision.PoseLandmarker.create_from_options(options) as landmarker:
         while not stop_event.is_set():
@@ -169,7 +159,7 @@ def pose_loop(buf, stop_event, model_path, num_poses, preview):
                 continue
 
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-            result = landmarker.detect_for_video(mp_image, timestamps.next())
+            result = landmarker.detect(mp_image)
 
             if result.pose_landmarks:
                 osc_process()

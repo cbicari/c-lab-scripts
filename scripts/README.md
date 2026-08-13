@@ -83,3 +83,10 @@ picking a downloadable model file.
   That folder is git-ignored — it'll just re-download if it's missing.
 - If tracking feels laggy, try lowering `--width`/`--height` before reaching
   for a lower `--model-complexity` — resolution tends to matter more.
+- `ndi_to_osc_multi.py` re-detects all poses from scratch on every frame
+  (MediaPipe's IMAGE mode) instead of tracking between frames, specifically
+  so it reliably picks up more than one person — MediaPipe's streaming modes
+  tend to lock onto a single tracked person and largely ignore `--num-poses`.
+  This trades away a bit of the smoothing/jitter-reduction you'd get from
+  frame-to-frame tracking, but that's the tradeoff to actually get multiple
+  bodies recognized.
