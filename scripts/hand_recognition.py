@@ -20,7 +20,7 @@ def extract_indexes_and_send_as_single_osc(hand_index, landmarks):
     return
 
 
-def detection_context(dev_id = 0):
+def detection_context(dev_id = 10):
 
     cap = cv2.VideoCapture(dev_id)
     with mp_hands.Hands(max_num_hands = 1) as hands:
